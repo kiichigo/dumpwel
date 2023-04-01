@@ -59,7 +59,7 @@ class Dumpwel(object):
                     return {}
             return data
         return {}
-    
+
     def saveConf(self, data):
         self.mkAppDir()
         with open(self.config, 'w', encoding='utf-8') as f:
@@ -71,7 +71,7 @@ class Dumpwel(object):
         res = self.session.get(_TOP_URL + "/top/menu", allow_redirects=False)
         if res.status_code == 200:
             return True
-        
+
     def getCsrfId(self):
         res = self.session.get(_TOP_URL, allow_redirects=False)
         return res.cookies.get("photo_csrf_cookie_name")
@@ -86,7 +86,7 @@ class Dumpwel(object):
         """
 
         csrf_id = self.getCsrfId()
-        log.info("not logged in.")    
+        log.info("not logged in.")
         conf = self.loadConf()
         if useSavedId and "id" in conf and conf["id"]:
             id = conf["id"]
@@ -101,24 +101,28 @@ class Dumpwel(object):
         if res.status_code == 200:
             self.saveCookie()
         return res
-    
+
     def iter_album(self):
         """
         https://photo.wel-kids.jp/album/show_list
         https://photo.wel-kids.jp/album/show_list/normal?page=4
         """
         url_fmt = "https://photo.wel-kids.jp/album/show_list?page=%d"
-        for page in range(100):
+        for page in range(1, 100):
             url = url_fmt % page
             res = self.session.get(url)
             soup = BeautifulSoup(res.text, "html.parser")
             for album in soup.find_all("a", class_="albumLink"):
                 albumtitleline = album.find("span", class_="albumtitleline")
                 albumtitle = albumtitleline.text.strip()
-                yield {"title": albumtitle, "url": album["href"]}
+                datestr = album.find("dd", class_="albumShotTime").text.strip()
+                data = dict(title=albumtitle,
+                            url=album["href"],
+                            datestr=datestr)
+                yield data
             if soup.find("li", class_="cPageNextOff"):
                 break
-    
+
     def iter_photo(self, album_data):
         """
         <a class="photo-view" data-url="https://photo.wel-kids.jp/album/photo_viewer/58563119">
@@ -153,6 +157,7 @@ class Dumpwel(object):
         bin = res.content
         return bin
 
+
 def get_appdatadir() -> pathlib.Path:
     """
     Returns a parent directory path
@@ -173,6 +178,13 @@ def get_appdatadir() -> pathlib.Path:
         return home / "Library/Application Support"
 
 
+def sanitize_filename(filename):
+    # ファイル名として使えない文字を置換する
+    invalid_chars = '<>:"/\\|?*\n'
+    replace_chars = '＜＞：”／＼｜？＊_'
+    table = str.maketrans(invalid_chars, replace_chars)
+    return filename.translate(table)
+
 
 def main():
     d = Dumpwel()
@@ -183,19 +195,32 @@ def main():
             if res.status_code == 200:
                 break
     for album_data in d.iter_album():
-        print(album_data["title"])
+        print(album_data["datestr"], album_data["title"])
         count = 0
         for photo in d.iter_photo(album_data):
             count += 1
-            bin = d.get_photo(photo)
-            folder = p.join(_DUMPDIR, album_data["title"])
+            old_folder = p.join(_DUMPDIR, album_data["title"])
+            title = sanitize_filename(album_data["title"])
+            datestr = album_data["datestr"].replace("/", "-")
+            folder = p.join(_DUMPDIR, "%s_%s" % (datestr, title))
+            id = photo.split("/")[-1]
+            old_fn = p.join(old_folder, "%s.jpg" % id)
+            fn = p.join(folder, "%s.jpg" % id)
+            fn2 = p.join(folder, "%04d_%s.jpg" % (count, id))
             if not p.isdir(folder):
                 os.makedirs(folder)
-            id = photo.split("/")[-1]
-            fn = p.join(folder, "%s.jpg" % id)
-            with open(fn, 'wb') as f:
-                f.write(bin)
+            if p.isfile(old_fn):
+                os.rename(old_fn, fn2)
+            elif p.isfile(fn):
+                os.rename(fn, fn2)
+            elif p.isfile(fn2):
+                pass
+            else:
+                bin = d.get_photo(photo)
+                with open(fn2, 'wb') as f:
+                    f.write(bin)
         print(count)
+
 
 if __name__ == "__main__":
     main()
